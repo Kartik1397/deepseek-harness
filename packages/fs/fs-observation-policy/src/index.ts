@@ -15,10 +15,40 @@ import type { FsObservationActor } from './types.ts'
 export type { FsObservationActor } from './types.ts'
 
 /**
+ * How an owned edit of an unseen target is decided: `reject` fails with
+ * `FS_NOT_OBSERVED`; `literal-match` applies it unguarded, so the provider's
+ * atomic literal match against current content is the only basis.
+ */
+export type UnobservedEdit = 'reject' | 'literal-match'
+
+/** Plugin config. */
+export interface Config {
+  /** Decision for an owned edit of an unseen target. Defaults to `reject`. */
+  unobservedEdit?: UnobservedEdit
+}
+
+const UNOBSERVED_EDITS: readonly string[] = ['reject', 'literal-match'] satisfies UnobservedEdit[]
+
+/**
+ * Resolve the config at load; an unknown `unobservedEdit` value fails loud.
+ * @param config - the raw plugin config, absent when the row has none.
+ * @returns the unobserved-edit decision, `reject` when omitted.
+ */
+function resolveUnobservedEdit(config: Config | undefined): UnobservedEdit {
+  const value = config?.unobservedEdit ?? 'reject'
+  if (!UNOBSERVED_EDITS.includes(value)) {
+    throw new Error(`fs-observation-policy: unobservedEdit must be one of ${UNOBSERVED_EDITS.join(', ')}; got ${JSON.stringify(value)}`)
+  }
+  return value
+}
+
+/**
  * Per-context observed-file state and the three `fs/*` decisions over it. One
  * instance is created per `apply()` so disposal can drop all state for HMR.
  */
 class ObservedStateGate {
+  constructor(private readonly unobservedEdit: UnobservedEdit) {}
+
   /**
    * Observed-file state, keyed first by the owner object (weakly held, so a
    * collected session frees its state), then by {@link FsTarget.targetKey}. An
@@ -71,13 +101,15 @@ class ObservedStateGate {
   }
 
   /**
-   * Decide the edit version guard: unseen rejects with `FS_NOT_OBSERVED`,
-   * confirmed absence rejects with `FS_NOT_FOUND`, and presence supplies the
-   * observed version as the CAS basis.
+   * Decide the edit version guard: no owner rejects with `FS_NOT_OBSERVED`;
+   * an owned unseen target rejects with `FS_NOT_OBSERVED` or, under
+   * `literal-match`, edits unguarded; confirmed absence rejects with
+   * `FS_NOT_FOUND`; presence supplies the observed version as the CAS basis.
    */
-  editIntent(target: FsTarget, actor: object | undefined): { version: FsVersion } {
+  editIntent(target: FsTarget, actor: object | undefined): { version: FsVersion } | undefined {
     const owner = this.owner(actor)
     const prior = owner ? this.get(owner, target.targetKey) : undefined
+    if (owner && prior === undefined && this.unobservedEdit === 'literal-match') return undefined
     if (!owner || prior === undefined) {
       throw new FsError(`edit requires reading "${target.displayPath}" first`, 'FS_NOT_OBSERVED')
     }
@@ -102,9 +134,11 @@ export const name = 'fs-observation-policy'
  * services; it operates only on its own `WeakMap`. The waterfalls are unbound
  * (the tool dispatches them with no `this`), so the listeners take the raw
  * `(target, actor, next)` arguments.
+ * @param ctx - the plugin context that owns the listeners and observed state.
+ * @param config - the plugin config; see {@link Config}.
  */
-export function apply(ctx: Context): void {
-  const gate = new ObservedStateGate()
+export function apply(ctx: Context, config?: Config): void {
+  const gate = new ObservedStateGate(resolveUnobservedEdit(config))
 
   ctx.effect(() => () => {
     // Drop all recorded state on disposal so a reloaded plugin starts clean

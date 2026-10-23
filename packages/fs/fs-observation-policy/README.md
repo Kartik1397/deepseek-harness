@@ -25,7 +25,7 @@ English | [中文](README.zh.md)
 <a id="use-this-package"></a>
 ## Use this package
 
-Load this plugin alongside a `ctx.fs` backend and the `dsh-tool-fs` tools when a deployment wants the model to read a file before it can overwrite or edit it. The plugin needs no configuration and injects no service; it only listens for the `fs/*` events the tools dispatch.
+Load this plugin alongside a `ctx.fs` backend and the `dsh-tool-fs` tools when a deployment wants the model to read a file before it can overwrite or edit it. The plugin injects no service; it only listens for the `fs/*` events the tools dispatch. Its one option, `unobservedEdit`, decides an agent's edit of an unread file: `reject` (the default) fails it with `FS_NOT_OBSERVED`, while `literal-match` applies it without a version guard, so the provider's atomic literal match against current content is its only basis. The dsh base bundle sets `literal-match` because a rejected edit only costs a read and a repeated edit.
 
 ### Minimal composition
 
@@ -39,7 +39,7 @@ Load a backend, then this plugin, then the tools. The policy listener should be 
 
 ### What changes for the model
 
-With the policy mounted, `write` creates new files but refuses to overwrite an existing file that the session has not read, `edit` requires a prior read of the target, and a file that changed since it was read fails with `FS_STALE_VERSION`. Absence is recorded too: reading a missing file marks it confirmed absent, so a later `write` may recreate it through the guarded-create flow. A session resumes with no observed state, so it must re-read files before guarded mutations succeed again.
+With the policy mounted, `write` creates new files but refuses to overwrite an existing file that the session has not read, `edit` requires a prior read of the target unless `unobservedEdit` is `literal-match`, and a file that changed since it was read fails with `FS_STALE_VERSION`. Absence is recorded too: reading a missing file marks it confirmed absent, so a later `write` may recreate it through the guarded-create flow. A session resumes with no observed state, so it must re-read files before guarded mutations succeed again.
 
 ### Failures and recovery
 

@@ -58,9 +58,9 @@ import type {
 } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
-import type { ResolvedPiAiProviderProfile } from './config.ts'
+import type { PiAiThinkingDisplay, ResolvedPiAiProviderProfile } from './config.ts'
 import { requestImageTarget, toPiContext } from './context.ts'
-import { conversationUpdates, createModels, getSupportedThinkingLevels } from './models.ts'
+import { conversationUpdates, createModels, getSupportedThinkingLevels, managesReasoningEffort } from './models.ts'
 import { toStreamChunks } from './stream.ts'
 
 /**
@@ -123,14 +123,35 @@ export interface PiAiAuthInjection {
   authContext: AuthContext
 }
 
+/**
+ * Replace `thinking.display` in an Anthropic Messages payload that already carries one.
+ * pi-ai's simple-stream options cannot select the display, and it sends
+ * `summarized` whenever thinking is enabled; a payload without a display
+ * (thinking disabled or absent) passes through unchanged.
+ * @param display - the profile's resolved thinking display.
+ * @returns the pi-ai payload hook.
+ */
+function thinkingDisplayPayload(display: PiAiThinkingDisplay): NonNullable<SimpleStreamOptions['onPayload']> {
+  return (payload) => {
+    if (typeof payload !== 'object' || payload === null || !('thinking' in payload)) return undefined
+    const thinking = payload.thinking
+    if (typeof thinking !== 'object' || thinking === null || !('display' in thinking)) return undefined
+    return { ...payload, thinking: { ...thinking, display } }
+  }
+}
+
 /** Copy profile stream knobs into pi-ai's common option vocabulary. */
 function profileOptions(
   profile: ResolvedPiAiProviderProfile,
+  model: Model<Api>,
   reasoning: ModelThinkingLevel | undefined,
   apiKey: string | undefined,
 ): SimpleStreamOptions {
   const enabledReasoning: ThinkingLevel | undefined = reasoning === 'off' ? undefined : reasoning
   return {
+    ...model.api === 'anthropic-messages' && profile.thinkingDisplay !== 'summarized'
+      ? { onPayload: thinkingDisplayPayload(profile.thinkingDisplay) }
+      : {},
     ...apiKey === undefined ? {} : { apiKey },
     ...enabledReasoning === undefined ? {} : { reasoning: enabledReasoning },
     ...profile.thinkingBudgets === undefined ? {} : { thinkingBudgets: profile.thinkingBudgets },
@@ -141,6 +162,20 @@ function profileOptions(
     // The agent recovery layer owns visible attempts; one adapter call is one SDK attempt.
     maxRetries: 0,
   }
+}
+
+/**
+ * The effort a route defaults to for one model when the request names none:
+ * the profile's `reasoning`, else `defaultManagedEffort` for a model whose
+ * effort pi-ai manages. Selecting it explicitly makes pi-ai send that effort
+ * instead of its own `high`, so the default is a request effort, not a payload edit.
+ * @param profile - the route's resolved profile.
+ * @param model - the resolved model descriptor.
+ * @returns the configured default level, if any applies to this model.
+ */
+function defaultReasoning(profile: ResolvedPiAiProviderProfile, model: Model<Api>): ModelThinkingLevel | undefined {
+  if (profile.reasoning !== undefined) return profile.reasoning
+  return undefined
 }
 
 /**
@@ -325,7 +360,7 @@ export class PiAiAdapter extends LlmAdapter {
   private modelInfo(snapshot: PiAiSnapshot, provider: string, model: string): LlmResolvedModelInfo {
     const profile = this.profileOf(snapshot, provider)
     const resolvedModel = this.modelOf(snapshot, provider, model)
-    const defaultLevel = describableReasoningLevel(resolvedModel, profile.reasoning)
+    const defaultLevel = describableReasoningLevel(resolvedModel, defaultReasoning(profile, resolvedModel))
     // Only a cap the deployment configured is a request default; the
     // catalog's `maxTokens` sizes the model and stops there.
     const configuredMaxTokens = profile.configuredMaxTokens.get(model)
@@ -379,7 +414,7 @@ export class PiAiAdapter extends LlmAdapter {
       : options
     const reasoning = resolveReasoningLevel(
       model,
-      options.reasoningEffort ?? profile.reasoning,
+      options.reasoningEffort ?? defaultReasoning(profile, model),
     )
     const apiKey = await this.config.resolveApiKey(options.provider, profile)
 
@@ -414,7 +449,7 @@ export class PiAiAdapter extends LlmAdapter {
           },
         }, onReplayDegrade)
       const events = snapshot.models.streamSimple(model, context, {
-        ...profileOptions(profile, reasoning, apiKey),
+        ...profileOptions(profile, model, reasoning, apiKey),
         ...options.temperature === undefined ? {} : { temperature: options.temperature },
         ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
         ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },

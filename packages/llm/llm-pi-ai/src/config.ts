@@ -46,6 +46,19 @@ import { buildProvider, supportedProtocols } from './provider.ts'
 /** Default maximum idle interval while an adapter stream read is outstanding. */
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
 
+/** How an Anthropic Messages route asks for thinking content in responses. */
+export type PiAiThinkingDisplay = 'summarized' | 'omitted'
+
+/** Default thinking display: the thinking still runs and bills, but no summary is generated or streamed. */
+export const DEFAULT_THINKING_DISPLAY: PiAiThinkingDisplay = 'omitted'
+
+/**
+ * Default effort for a model whose effort pi-ai manages when nothing selects
+ * one. pi-ai itself falls back to `high` for these models, above the Anthropic
+ * API's own `medium` default.
+ */
+export const DEFAULT_MANAGED_EFFORT: ModelThinkingLevel = 'medium'
+
 /**
  * Default request-level bound on base64-encoded image payload. Every image in
  * history is re-encoded into every request body, so an unbounded conversation
@@ -152,8 +165,23 @@ export interface PiAiProviderProfile {
   headers?: Record<string, string>
   /** Provider-neutral pi-ai reasoning level. */
   reasoning?: ModelThinkingLevel
+  /**
+   * Effort selected for a managed-effort `anthropic-messages` model (default
+   * `medium`) when neither the request nor {@link reasoning} selects one;
+   * pi-ai alone would send `high`. The level must be one the model supports,
+   * else the request fails with `UNSUPPORTED_REASONING_EFFORT`. `high`
+   * restores pi-ai's own default. Other models ignore it.
+   */
+  defaultManagedEffort?: ModelThinkingLevel
   /** Token budgets used by reasoning providers that support them. */
   thinkingBudgets?: ThinkingBudgets
+  /**
+   * `thinking.display` sent with every `anthropic-messages` request that
+   * enables thinking (default `omitted`). `omitted` returns signed thinking
+   * blocks with empty text, so reasoning is neither streamed nor logged as
+   * text; `summarized` streams and logs a summary. Other protocols ignore it.
+   */
+  thinkingDisplay?: PiAiThinkingDisplay
   /** Prompt-cache retention preference. */
   cacheRetention?: CacheRetention
   /** Streaming transport preference. */
@@ -191,6 +219,10 @@ export interface ResolvedPiAiProviderProfile
   displayName: string
   /** Validated credential reference, when one is configured. */
   apiKeyEnv?: CredentialRef
+  /** Anthropic Messages thinking display after defaulting. */
+  thinkingDisplay: PiAiThinkingDisplay
+  /** Managed-effort default effort after defaulting. */
+  defaultManagedEffort: ModelThinkingLevel
   /** Positive finite provider-idle interval after defaulting. */
   streamIdleTimeoutMs: number
   /** Positive request-level base64 image payload bound after defaulting. */
@@ -336,7 +368,9 @@ const profile = z.object({
   defaultInput: z.array(z.union(MODALITIES)).default([...DEFAULT_INPUT]),
   headers: z.dict(z.string()),
   reasoning: z.union(THINKING_LEVELS),
+  defaultManagedEffort: z.union(THINKING_LEVELS).default(DEFAULT_MANAGED_EFFORT),
   thinkingBudgets,
+  thinkingDisplay: z.union(['summarized', 'omitted']).default(DEFAULT_THINKING_DISPLAY),
   cacheRetention: z.union(['none', 'short', 'long']),
   transport: z.union(['sse', 'websocket', 'websocket-cached', 'auto']),
   timeoutMs: z.natural(),
@@ -493,6 +527,8 @@ export function resolveProfiles(
       provider,
       displayName,
       ...apiKeyEnv === undefined ? {} : { apiKeyEnv: credentialRef(apiKeyEnv) },
+      thinkingDisplay: source.thinkingDisplay ?? DEFAULT_THINKING_DISPLAY,
+      defaultManagedEffort: source.defaultManagedEffort ?? DEFAULT_MANAGED_EFFORT,
       streamIdleTimeoutMs,
       maxRequestImageBytes,
       requestImagePixelBudget,

@@ -30,8 +30,12 @@ import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-cmdline'
 import type {} from '@deepseek-ai/dsh-session-query'
 import type {} from '@deepseek-ai/dsh-subagent'
+import type {} from '@deepseek-ai/dsh-tools'
 import { internals } from './runner-internals.ts'
 import { projectJsonRun, boundJsonLine } from './json-stream.ts'
+import { selectTools, ToolSelectionConfig } from './tool-selection.ts'
+import type { ToolSelection } from './tool-selection.ts'
+import { FilePreloadConfig, planWorkspacePreload, readPreload } from './file-preload.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'headless-runner'
@@ -47,13 +51,37 @@ export interface Config {
   sessionId?: string
   /** Whether stdout carries the machine-readable event stream instead of final text. */
   json?: boolean
+  /** Jev rating of optional tool groups for a fresh run; absent keeps every tool. */
+  toolSelection?: ToolSelectionConfig
+  /** Jev-selected workspace files a fresh run reads before its first request; absent or disabled reads none. */
+  filePreload?: FilePreloadConfig
 }
 
 export const Config: z<Config> = z.object({
   task: z.string(),
   sessionId: z.string(),
   json: z.boolean(),
+  toolSelection: ToolSelectionConfig,
+  filePreload: FilePreloadConfig,
 })
+
+/**
+ * Hide the tool groups one selection rated unneeded from the run's Agent.
+ * @param agentCtx - the Agent's scoped context.
+ * @param agent - the Agent whose visible tools bound the restriction.
+ * @param selection - the settled selection.
+ * @param stderr - diagnostic sink for a selection that kept every tool after a failure.
+ */
+function applyToolSelection(agentCtx: Context, agent: Agent, selection: ToolSelection, stderr: HeadlessIo['stderr']): void {
+  if (selection.kind === 'keep') {
+    if (selection.reason !== undefined) stderr.write(`dsh: tool selection kept every tool: ${selection.reason}\n`)
+    return
+  }
+  const visible = new Set(agentCtx.tools.schemas(agent).map(tool => tool.name))
+  const deny = selection.tools.filter(tool => visible.has(tool))
+  if (deny.length === 0) return
+  agentCtx.tools.restrict({ deny })
+}
 
 /** Outcome of one owned run interval. */
 interface RunOutcome {
@@ -331,19 +359,33 @@ async function run(ctx: Context, config: Config, io: HeadlessIo): Promise<void> 
     throw new Error('a task is required, for example: dsh --profile headless "run the tests"')
   }
 
+  // A fresh run rates its tool groups in parallel with Agent creation; an
+  // adopted Session keeps the catalog its history was recorded with.
+  const toolSelection = config.sessionId === undefined && config.toolSelection !== undefined
+    ? selectTools(config.toolSelection, task, process.env)
+    : undefined
+  const fs = ctx.get('fs')
+  const root = fs === undefined ? undefined : await fs.resolve('.')
+  const cwd = fs === undefined || root === undefined ? process.cwd() : fs.processPath(root)
+  // A fresh run plans its file preload in parallel with Agent creation, under
+  // the same adoption rule as tool selection.
+  const filePreload = config.sessionId === undefined && config.filePreload?.enabled === true ? config.filePreload : undefined
+  const preloadPlan = filePreload !== undefined && fs !== undefined && root !== undefined
+    ? planWorkspacePreload(fs, root, filePreload, task, process.env)
+    : undefined
   const selection = defaultModel.currentSelection()
   const agentOptions = { provider: selection.provider, model: selection.model }
+  let scopedCtx: Context | undefined
   // This bundle composes no preset roster, so the model-facing rows sit in the
   // host plane and the agent reads them from the global layer. A deployment
   // that DOES configure one has to join it here first
   // (@deepseek-ai/dsh-agent-preset-registry README, "Composing a child agent").
   const setup = (agentCtx: Context): void => {
+    scopedCtx = agentCtx
     const selected: ModelSelectionRef = { current: selection, assembled: undefined }
     installModelSelection(agentCtx, selected)
   }
   const sessionId = brandString<SessionId>(config.sessionId ?? `session-${randomUUID()}`)
-  const fs = ctx.get('fs')
-  const cwd = fs === undefined ? process.cwd() : fs.processPath(await fs.resolve('.'))
   const agent = config.sessionId === undefined
     ? (await agents.create({
       sessionId,
@@ -358,6 +400,19 @@ async function run(ctx: Context, config: Config, io: HeadlessIo): Promise<void> 
     // preset selection between it and the interval this run now owns, so
     // re-read the log the runner holds before submitting the task.
     assertAdoptable(agent.session.header, liveEvents(agent.session), sessionId, cwd)
+  }
+  if (toolSelection !== undefined && scopedCtx !== undefined) {
+    applyToolSelection(scopedCtx, agent, await toolSelection, io.stderr)
+  }
+  if (filePreload !== undefined && preloadPlan !== undefined && scopedCtx !== undefined) {
+    const plan = await preloadPlan
+    if (plan.kind === 'skip') {
+      if (plan.reason !== undefined) io.stderr.write(`dsh: file preload skipped: ${plan.reason}\n`)
+    } else {
+      for (const message of await readPreload(scopedCtx, agent, plan, AbortSignal.timeout(filePreload.timeoutMs))) {
+        agent.inject(message)
+      }
+    }
   }
   const firstSeq = agent.session.seq
   const projection = config.json === true ? projectJsonRun(ctx, agent, io.stdout, { cwd }) : undefined

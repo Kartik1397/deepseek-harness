@@ -112,6 +112,43 @@ describe('edit-intent decision', () => {
   })
 })
 
+describe('unobservedEdit: literal-match', () => {
+  async function literalMatch() {
+    const ctx = new Context()
+    await ctx.plugin(FsPolicy, { unobservedEdit: 'literal-match' })
+    return ctx
+  }
+
+  it('applies an owned unread edit unguarded', async () => {
+    const ctx = await literalMatch()
+    expect(await editIntent(ctx, target('a.txt'), ownerExec({}))).toBeUndefined()
+  })
+
+  it('still rejects an edit with no owner', async () => {
+    const ctx = await literalMatch()
+    await expect(editIntent(ctx, target('a.txt'), undefined)).rejects.toMatchObject({ code: 'FS_NOT_OBSERVED' })
+  })
+
+  it('keeps the observed version guard and the confirmed-absence rejection', async () => {
+    const ctx = await literalMatch()
+    const exec = ownerExec({})
+    ctx.emit('fs/observed', target('a.txt'), present('v3'), exec)
+    expect(await editIntent(ctx, target('a.txt'), exec)).toEqual({ version: 'v3' })
+    ctx.emit('fs/observed', target('b.txt'), absent, exec)
+    await expect(editIntent(ctx, target('b.txt'), exec)).rejects.toMatchObject({ code: 'FS_NOT_FOUND' })
+  })
+
+  it('leaves unread overwrites guarded', async () => {
+    const ctx = await literalMatch()
+    expect(await writeIntent(ctx, target('a.txt'), ownerExec({}))).toEqual({ kind: 'createIfAbsent' })
+  })
+
+  it('fails loud on an unknown value', async () => {
+    const ctx = new Context()
+    await expect(ctx.plugin(FsPolicy, { unobservedEdit: 'allow' as 'reject' })).rejects.toThrow('unobservedEdit must be one of reject, literal-match; got "allow"')
+  })
+})
+
 describe('observed-state is the prior-observation record', () => {
   it('a read observation authorizes an in-place write at that version', async () => {
     const { ctx } = await setup()

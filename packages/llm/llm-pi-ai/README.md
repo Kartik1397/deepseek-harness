@@ -223,11 +223,11 @@ Conversion preserves logical request order, while image handles and offload plac
 
 #### What the model sees
 
-pi-ai events become harness reasoning, text, tool-call, usage, and finish chunks. The adapter passes parsed tool arguments to the harness as raw JSON strings.
+pi-ai events become harness reasoning, text, tool-call, usage, and finish chunks. The adapter passes parsed tool arguments to the harness as raw JSON strings. An `anthropic-messages` route sends its profile's `thinkingDisplay` (default `omitted`) as `thinking.display` whenever thinking is enabled: `omitted` returns signed reasoning blocks with empty text, which replay unchanged, and `summarized` streams and logs a reasoning summary.
 
 #### Token effect
 
-Generated content affects later inputs only after the loop records it. pi-ai folds reasoning tokens into output usage when the provider does not report them separately, and preserves its exact `totalTokens` value unchanged.
+Generated content affects later inputs only after the loop records it. `thinkingDisplay` changes neither billed thinking tokens nor what the model receives on replay; `omitted` skips summary generation and streaming. pi-ai folds reasoning tokens into output usage when the provider does not report them separately, and preserves its exact `totalTokens` value unchanged.
 
 #### KV Cache effect
 

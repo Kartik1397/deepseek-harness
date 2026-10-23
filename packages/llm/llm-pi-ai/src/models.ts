@@ -68,6 +68,19 @@ export function getSupportedThinkingLevels(model: Model<Api>): ModelThinkingLeve
 }
 
 /**
+ * Whether pi-ai manages this model's reasoning effort: an `anthropic-messages`
+ * model whose catalog entry declares `supportsMidConvoEffort`. pi-ai sends an
+ * effort on every request for such a model, `high` when none is selected.
+ * @param model - Materialized pi-ai model, including catalog compatibility flags.
+ * @returns whether an unselected effort reaches the provider as pi-ai's own default.
+ */
+export function managesReasoningEffort(model: Model<Api>): boolean {
+  const compat = model.compat
+  return model.api === 'anthropic-messages'
+    && compat !== undefined && 'supportsMidConvoEffort' in compat && compat.supportsMidConvoEffort === true
+}
+
+/**
  * Resolve transcript update modes from the exact model's protocol capabilities.
  * @param model - Materialized pi-ai model, including catalog compatibility flags.
  * @returns Update modes consumed by prompt admission and tool-history projection.
