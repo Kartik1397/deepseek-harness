@@ -223,11 +223,11 @@ git add packages/llm/llm-pi-ai/src/provider-data.generated.ts
 
 #### 模型看到什么
 
-pi-ai 事件变成 harness 的推理、文本、工具调用、用量与 finish 分片。适配器把解析后的工具参数以原始 JSON 字符串传给 harness。
+pi-ai 事件变成 harness 的推理、文本、工具调用、用量与 finish 分片。适配器把解析后的工具参数以原始 JSON 字符串传给 harness。启用思考时，`anthropic-messages` 路由把 profile 的 `thinkingDisplay`（默认 `omitted`）作为 `thinking.display` 发送：`omitted` 返回文本为空的带签名推理块，回放时原样发回；`summarized` 流式输出并记录推理摘要。
 
 #### Token 影响
 
-生成内容只在 loop 记录后才影响后续输入。提供方未单独报告推理 token 时，pi-ai 会把推理 token 并入输出用量，并原样保留其精确 `totalTokens` 值。
+生成内容只在 loop 记录后才影响后续输入。`thinkingDisplay` 不改变计费的思考 token，也不改变回放时模型收到的内容；`omitted` 跳过摘要的生成与流式输出。提供方未单独报告推理 token 时，pi-ai 会把推理 token 并入输出用量，并原样保留其精确 `totalTokens` 值。
 
 #### KV Cache 影响
 

@@ -840,6 +840,43 @@ describe('provider profile lifecycle', () => {
     expect(server.requests[2]).not.toHaveProperty('output_config')
   })
 
+  it('sends the profile thinking display on Anthropic thinking requests', async () => {
+    vi.stubEnv('PI_TEST_KEY', 'test-key')
+    const server = await mockServer([
+      { events: anthropicTextEvents },
+      { events: anthropicTextEvents },
+      { events: anthropicTextEvents },
+    ])
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    const route = (thinkingDisplay?: 'summarized' | 'omitted') => ({
+      apiKeyEnv: 'PI_TEST_KEY',
+      api: 'anthropic-messages' as const,
+      baseURL: server.url,
+      reasoning: 'high' as const,
+      compat: { forceAdaptiveThinking: true },
+      ...thinkingDisplay === undefined ? {} : { thinkingDisplay },
+      models: [{ id: 'thinker', reasoningEfforts: { off: null, high: 'high' } }],
+    })
+    await ctx.plugin(LlmPiAi, { providers: { 'default-display': route(), summarized: route('summarized') } })
+    const request = (provider: string, effort: string): Promise<unknown> => assemble(ctx, {
+      provider,
+      model: 'thinker',
+      reasoningEffort: ReasoningEffortId(effort),
+      maxTokens: 64,
+      messages: [],
+    })
+
+    await request('default-display', 'high')
+    await request('summarized', 'high')
+    await request('default-display', 'off')
+
+    expect(server.requests[0]).toMatchObject({ thinking: { type: 'adaptive', display: 'omitted' } })
+    expect(server.requests[1]).toMatchObject({ thinking: { type: 'adaptive', display: 'summarized' } })
+    expect(server.requests[2]).toMatchObject({ thinking: { type: 'disabled' } })
+    expect(server.requests[2]).not.toHaveProperty('thinking.display')
+  })
+
   it('accepts absent credentials for pi-ai ambient authentication', async () => {
     vi.stubEnv('DEEPSEEK_API_KEY', 'ambient-key')
     const server = await mockServer([{ events: textEvents }])

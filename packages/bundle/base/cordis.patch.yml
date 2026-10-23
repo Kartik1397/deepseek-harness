@@ -291,6 +291,10 @@
 
     - id: fs-observation-policy
       name: '@deepseek-ai/dsh-fs-observation-policy'
+      config:
+        # An unread edit still needs a literal old_string match against current
+        # content; rejecting it only costs a read and a repeated edit.
+        unobservedEdit: literal-match
 
     - id: tool-fs
       name: '@deepseek-ai/dsh-tool-fs'

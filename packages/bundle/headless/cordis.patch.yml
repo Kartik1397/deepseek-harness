@@ -28,6 +28,43 @@
         task: !!js ctx.headlessStartup.task
         sessionId: !!js ctx.headlessStartup.sessionId
         json: !!js ctx.headlessStartup.json
+        # A fresh run asks Jev (TYPESAFE_BASE_URL) once whether the task needs
+        # each group and hides the groups rated unlikely before the first
+        # request; an unset endpoint or any failure keeps every tool.
+        toolSelection:
+          enabled: true
+          groups:
+            - name: delegation
+              question: >-
+                Does completing this task require delegating work to other AI agents: spawning subagents,
+                running several agents in parallel, messaging or interrupting running agents, or running a
+                multi-agent workflow script? Ordinary single-agent coding, shell, and file work does not count.
+              tools: [subagent, subagent_fork, workflow, list_agents, send_message, interrupt_agent]
+            - name: goal
+              question: >-
+                Does the user ask to create, track, or resume a persistent goal that the agent keeps pursuing
+                across several rounds?
+              tools: [create_goal, get_goal, update_goal]
+            - name: todo
+              question: Does the user explicitly ask for a todo list, checklist, or tracked step-by-step progress?
+              tools: [todo_write]
+            - name: web
+              question: >-
+                Does completing this task require fetching a web page or other content from an internet
+                HTTP(S) URL, rather than local files, commands, or a local server?
+              tools: [web_fetch]
+            - name: image
+              question: >-
+                Does completing this task require looking at an image file such as a screenshot, photo, or
+                diagram, rather than only text files?
+              tools: [read_image]
+        # A fresh run in a workspace of at most maxListedFiles files asks Jev
+        # once which files the task needs, reads those rated likely through
+        # the read tool, and sends the listing and contents before the first
+        # request; an unset endpoint or any failure sends nothing.
+        filePreload:
+          enabled: true
+          skipDirectories: [node_modules, __pycache__, venv, dist, build, target, coverage]
 
 - id: hmr
   disabled: true

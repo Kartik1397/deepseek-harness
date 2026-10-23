@@ -139,11 +139,17 @@ Read these pages when you want to go deeper into the shared core, the sibling GU
 <a id="model-experience"></a>
 ## Model Experience
 
-None, as the runner submits the task as an ordinary user message and the composed base and headless rows own the prompts and tools.
+The runner submits the task as an ordinary user message. On a fresh run, the `toolSelection` row config sends the task to Jev (`$TYPESAFE_BASE_URL/v1/systemone`, deadline at most 2,000 ms) as one Noul question per configured tool group, then hides each group whose probability of being needed is at most `maxNeedProbability` (default 0.2) through an Agent-scoped tool restriction. The shipped groups are delegation, goal, todo, web, and image tools. An unset endpoint, a failure, or `enabled: false` keeps every tool; a failure also writes one `dsh: tool selection kept every tool` line to stderr. An adopted `--session-id` Session keeps its catalog.
+
+On a fresh run with the endpoint set, the `filePreload` row config lists the workspace breadth-first (dot-prefixed entries and `skipDirectories` excluded) and, when it holds at most `maxListedFiles` (default 60) files, sends the task and the paths with sizes to Jev as one Noul question per file. The runner reads up to `maxFiles` (default 4) files rated at least `minNeedProbability` (default 0.6), each at most `maxFileBytes` and together at most `maxTotalBytes`, through the Agent's own `read` tool, so the registry's policy pipeline applies and later `write`/`edit` calls see the reads as observations. It then injects one `headless-preload` user message holding the file listing and the rendered read results before the first request. A larger workspace, a failure, no file above the floor, or `enabled: false` sends no message; a failure writes one `dsh: file preload skipped` line to stderr.
+
+#### Token effect
+
+Each hidden group removes its schemas, and the prompt guidance of tools whose sections follow visibility, from every request of the run; the shipped groups total about 10,700 schema characters. A preload adds the listing and at most `maxTotalBytes` of file contents to the first request, in place of the listing and read steps the model would otherwise spend.
 
 #### KV Cache effect
 
-The runner adds nothing to the request prefix; it only drives one user message through the composed tree.
+The selection and the preload settle before the first request and never change during the run, so the request prefix stays stable; runs with the same selection share one cached tool prefix.
 
 ## Known Limitations and Deferred Work
 

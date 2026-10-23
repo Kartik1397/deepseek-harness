@@ -1167,8 +1167,12 @@ describe('headless runner', () => {
   })
 
   it('validates config: the task and run options are optional', () => {
-    expect(new Config({})).toEqual({})
+    // Without groups, the materialized tool selection never sends a request.
+    const { toolSelection, filePreload } = new Config({})
+    expect(toolSelection).toMatchObject({ enabled: true, groups: [] })
+    expect(filePreload).toMatchObject({ enabled: true, minNeedProbability: 0.6, maxListedFiles: 60, skipDirectories: [] })
+    expect(new Config({})).toEqual({ toolSelection, filePreload })
     expect(new Config({ task: 'x', sessionId: 'session-x', json: true }))
-      .toEqual({ task: 'x', sessionId: 'session-x', json: true })
+      .toEqual({ task: 'x', sessionId: 'session-x', json: true, toolSelection, filePreload })
   })
 })
